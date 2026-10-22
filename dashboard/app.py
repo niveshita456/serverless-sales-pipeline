@@ -51,9 +51,11 @@ if not database_url():
 
 try:
     sales = load_sales()
-except Exception:
-    st.error("Could not reach the database. It may be paused or the connection string may be wrong.")
-    st.stop()
+    
+except Exception as e:
+       st.error(f"Could not reach the database ({type(e).__name__}).")
+       st.code(re.sub(r"://[^@\s]*@", "://***@", str(e))[:1000])
+       st.stop()
 
 if sales.empty:
     st.info("No data yet. Push a CSV to data/incoming/ to run the pipeline.")
