@@ -1,0 +1,65 @@
+name: Sales data pipeline
+
+on:
+  push:
+    branches: [main]
+    paths: ["data/incoming/**.csv"]
+  workflow_dispatch:
+    inputs:
+      file:
+        description: "CSV to (re)process (leave empty = all files)"
+        required: false
+        default: ""
+
+concurrency:
+  group: sales-pipeline
+  cancel-in-progress: false
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: pytest -q
+
+      - name: Find new or changed CSVs
+        id: files
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_FILE: ${{ inputs.file }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ] && [ -n "$INPUT_FILE" ]; then
+            FILES="$INPUT_FILE"
+          elif [ "$EVENT" = "workflow_dispatch" ]; then
+            FILES=$(ls data/incoming/*.csv 2>/dev/null | tr '\n' ' ')
+          elif [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            FILES=$(ls data/incoming/*.csv 2>/dev/null | tr '\n' ' ')
+          else
+            FILES=$(git diff --name-only --diff-filter=AM "$BEFORE" "$AFTER" -- 'data/incoming/*.csv' | tr '\n' ' ')
+          fi
+          echo "Files to process: $FILES"
+          echo "list=$FILES" >> "$GITHUB_OUTPUT"
+
+      - name: Clean and load into PostgreSQL
+        if: steps.files.outputs.list != ''
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          FILES: ${{ steps.files.outputs.list }}
+        run: python -m src.pipeline $FILES
